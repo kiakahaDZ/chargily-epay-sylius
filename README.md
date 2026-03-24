@@ -1,50 +1,63 @@
 # chargily-epay-sylius
-Sylius Plugin for Chargily ePay Gateway
 
-![Chargily ePay Gateway](https://raw.githubusercontent.com/Chargily/epay-gateway-php/main/assets/banner-1544x500.png "Chargily ePay Gateway")
+Sylius plugin for **Chargily Pay V2**.
 
-# Installation
-1. Via Composer (Recomended)
+## Compatibility
+
+- PHP **8.2+**
+- Sylius **2.2+**
+- Symfony **6.4 / 7.4** (through Sylius)
+
+## Installation
+
 ```bash
 composer require chargily/epay-sylius
 ```
 
-2. Register the bundle, add this line at the end of the file config/bundles.php 
-```bash
+Register the bundle in `config/bundles.php`:
+
+```php
 Chargily\EpayPlugin\ChargilyEpayPlugin::class => ['all' => true],
 ```
 
-3. Import the services, Add the follow line in config/services.yml
-```bash
+Import services in `config/services.yaml`:
+
+```yaml
 imports:
-    - { resource: "@ChargilyEpayPlugin/Resources/config/services.yml" }
+  - { resource: '@ChargilyEpayPlugin/Resources/config/services.yml' }
 ```
 
-4. Import the routes, Add the follow line in config/routes/sylius_shop.yml
-```bash
+Import routes in `config/routes/sylius_shop.yaml`:
+
+```yaml
 sylius_shop_chargily:
-    resource: "@ChargilyEpayPlugin/Resources/config/shop_routing.yml"
-```
-4. Clear the cache
-```bash
-php bin/console cache:clear
+  resource: '@ChargilyEpayPlugin/Resources/config/shop_routing.yml'
 ```
 
-- Download the latest release
-[Chargily Sylius Plugin](https://github.com/kiakahaDZ/chargily-epay-sylius/archive/refs/tags/v1.0.1.zip)
+## Gateway configuration (Chargily Pay V2)
 
-# Configurations
-![Configurations Screenshot 1](https://raw.githubusercontent.com/kiakahaDZ/chargily-epay-sylius/main/assets/Screenshot_1.png "Chargily ePay Gateway")
+Configure these fields in your Sylius payment method:
 
-![Configurations Screenshot 2](https://raw.githubusercontent.com/kiakahaDZ/chargily-epay-sylius/main/assets/Screenshot_2.png "Chargily ePay Gateway")
+- `secret_key`: Chargily API secret key.
+- `webhook_secret`: webhook signature secret (recommended).
+- `api_base_url`:
+  - Test: `https://pay.chargily.net/test/api/v2`
+  - Live: `https://pay.chargily.com/api/v2`
+- `success_url`: redirect URL after successful payment.
+- `failure_url`: redirect URL after failed/canceled payment.
+- `description`: default checkout description.
+- `payment_method`: `edahabia`, `cib`, or `chargily_app`.
+- `locale`: `ar`, `en`, or `fr`.
 
-This Plugin is to integrate ePayment gateway with Chargily easily.
-- Currently support payment by **CIB / EDAHABIA** cards and soon by **Visa / Mastercard** 
-- This repo is recently created for **Sylius Plugin**, If you are a developer and want to collaborate to the development of this plugin, you are welcomed!
+## Webhook endpoint
 
-# Contribution tips
-1. Make a fork of this repo.
-2. Take a tour to our [API documentation here](https://dev.chargily.com/docs/#/epay_integration_via_api)
-3. Get your API Key/Secret from [ePay by Chargily](https://epay.chargily.com.dz) dashboard for free.
-4. Start developing.
-5. Finished? Push and merge.
+The plugin exposes:
+
+`POST /chargily/response/{OrderNumber}`
+
+Use this endpoint as the checkout `webhook_endpoint` to update Sylius payment state.
+
+## Notes
+
+- This plugin now creates **V2 checkouts** using `/checkouts` endpoint and redirects to returned `checkout_url`.
+- Webhook handler supports both legacy `invoice.status` and V2 `data.status` payloads.
