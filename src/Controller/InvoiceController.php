@@ -1,81 +1,80 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Chargily\EpayPlugin\Controller;
 
 use Sylius\Component\Core\Model\PaymentInterface;
-use Sylius\Component\Core\Model\PaymentMethod;
 use Sylius\Component\Core\OrderPaymentStates;
+use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
-use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
-use Chargily\ePay\Chargily;
 
-class InvoiceController extends AbstractController
+final class InvoiceController extends AbstractController
 {
-    /**
-     * @param Request $request
-     *
-     * @throws \Exception
-     */
     public function renderPdfAction(Request $request): Response
     {
-        $number = $request->attributes->get('OrderNumber');
+        $number = (string) $request->attributes->get('OrderNumber');
+        $payload = json_decode($request->getContent(), true);
 
-        /** @var PaymentMethod $payfort */
-        $chargily_config = $this->get('sylius.repository.gateway_config')->findOneBy(['factoryName' => 'chargily']);
-        $repo = $this->get('sylius.repository.order');
-        $em = $this->get('doctrine.orm.entity_manager');
-        //if($chargily_config){
-        /** @var \App\Entity\Order\Order $order */
-        $order = $this->get('sylius.repository.order')->findOneBy(['number' => $number]);
-        //$order = $this->get('sylius.repository.order')->findOneBy(['number' => intval($number)]);
+        if (!is_array($payload)) {
+            return new JsonResponse(['code' => 400, 'message' => 'Invalid payload'], Response::HTTP_BAD_REQUEST);
+        }
 
-        $data = json_decode($request->getContent(), true);
+        $gatewayConfig = $this->container->get('sylius.repository.gateway_config')->findOneBy(['factoryName' => 'chargily']);
+        $webhookSecret = $gatewayConfig?->getConfig()['webhook_secret'] ?? null;
 
-        $order_id = isset($data['invoice']['invoice_number']) ? $data['invoice']['invoice_number'] : null;
+        if (is_string($webhookSecret) && '' !== $webhookSecret && !$this->isValidSignature($request, $webhookSecret)) {
+            return new JsonResponse(['code' => 401, 'message' => 'Invalid webhook signature'], Response::HTTP_UNAUTHORIZED);
+        }
 
-        if($data['invoice']['status'] == 'paid'){
-            /** @var PaymentInterface $payment */
-            $payment = $order->getLastPayment();
+        /** @var object|null $order */
+        $order = $this->container->get('sylius.repository.order')->findOneBy(['number' => $number]);
+        if (null === $order) {
+            return new JsonResponse(['code' => 404, 'message' => 'Order not found'], Response::HTTP_NOT_FOUND);
+        }
+
+        $status = $payload['data']['status'] ?? $payload['invoice']['status'] ?? null;
+        if (!is_string($status)) {
+            return new JsonResponse(['code' => 400, 'message' => 'Missing checkout status'], Response::HTTP_BAD_REQUEST);
+        }
+
+        /** @var PaymentInterface|null $payment */
+        $payment = $order->getLastPayment();
+        if (null === $payment) {
+            return new JsonResponse(['code' => 400, 'message' => 'Order has no payment'], Response::HTTP_BAD_REQUEST);
+        }
+
+        if ('paid' === $status) {
             $order->setPaymentState(OrderPaymentStates::STATE_PAID);
             $payment->setState(OrderPaymentStates::STATE_PAID);
-            $em->persist($order);
-            $em->flush();
-            return new JsonResponse([
-                'code' => 200,
-                'message' => 'Update state with success'
-            ]);
-        }
-
-        elseif($data['invoice']['status'] == 'failed'){
-            /** @var PaymentInterface $payment */
-            $payment = $order->getLastPayment();
-            $order->setPaymentState('failed');
-            $payment->setState('failed');
-            $em->persist($order);
-            $em->flush();
-            return new JsonResponse([
-                'code' => 200,
-                'message' => 'Update state with success'
-            ]);
-        }elseif( $data['invoice']['status'] == 'canceled'){
-            /** @var PaymentInterface $payment */
-            $payment = $order->getLastPayment();
+        } elseif (in_array($status, ['failed', 'expired', 'canceled'], true)) {
             $order->setPaymentState(OrderPaymentStates::STATE_CANCELLED);
             $payment->setState(OrderPaymentStates::STATE_CANCELLED);
-            $em->persist($order);
-            $em->flush();
-            return new JsonResponse([
-                'code' => 200,
-                'message' => 'Update state with success'
-            ]);
+        } else {
+            return new JsonResponse(['code' => 202, 'message' => 'Event ignored'], Response::HTTP_ACCEPTED);
         }
 
-        return new JsonResponse([
-            'code' => 400,
-            'message' => 'Update state Failed'
-        ]);
-        //return new Response();
+        $em = $this->container->get('doctrine.orm.entity_manager');
+        $em->persist($order);
+        $em->flush();
+
+        return new JsonResponse(['code' => 200, 'message' => 'Order payment state updated']);
+    }
+
+    private function isValidSignature(Request $request, string $webhookSecret): bool
+    {
+        $provided = $request->headers->get('signature')
+            ?? $request->headers->get('x-chargily-signature')
+            ?? '';
+
+        if ('' === $provided) {
+            return false;
+        }
+
+        $calculated = hash_hmac('sha256', $request->getContent(), $webhookSecret);
+
+        return hash_equals($calculated, $provided);
     }
 }

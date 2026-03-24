@@ -1,52 +1,58 @@
 <?php
-/**
- * Created by PhpStorm.
- * User: mohamed
- * Date: 12/4/18
- * Time: 12:32 PM
- */
+
+declare(strict_types=1);
 
 namespace Chargily\EpayPlugin\Form\Type;
 
 use Symfony\Component\Form\AbstractType;
 use Symfony\Component\Form\Extension\Core\Type\ChoiceType;
-use Symfony\Component\Form\Extension\Core\Type\HiddenType;
 use Symfony\Component\Form\Extension\Core\Type\TextType;
 use Symfony\Component\Form\FormBuilderInterface;
-use Symfony\Component\Validator\Constraints\NotBlank;
 
 final class ChargilyGatewayConfigurationType extends AbstractType
 {
-    /**
-     * @param FormBuilderInterface $builder
-     * @param array $options
-     */
-    public function buildForm(FormBuilderInterface $builder, array $options)
+    public function buildForm(FormBuilderInterface $builder, array $options): void
     {
         $builder
-            ->add('api_key', TextType::class, [
+            ->add('secret_key', TextType::class, [
                 'required' => true,
-                'label' => 'Api Key',
+                'label' => 'Secret key',
             ])
-            ->add('api_secret', TextType::class, [
-                'required'  =>  true,
-                'label' => 'Secret Key'
+            ->add('webhook_secret', TextType::class, [
+                'required' => false,
+                'label' => 'Webhook secret (optional)',
             ])
-            ->add('base_url', TextType::class, [
+            ->add('api_base_url', TextType::class, [
                 'required' => true,
-                'label' => 'Base Url',
+                'label' => 'API base URL',
             ])
-            ->add('invoice_details', TextType::class, [
+            ->add('description', TextType::class, [
                 'required' => true,
-                'label' => 'Invoice Details',
+                'label' => 'Checkout description',
             ])
-            ->add('mode', ChoiceType::class, [
+            ->add('success_url', TextType::class, [
+                'required' => true,
+                'label' => 'Success URL',
+            ])
+            ->add('failure_url', TextType::class, [
+                'required' => true,
+                'label' => 'Failure URL',
+            ])
+            ->add('locale', ChoiceType::class, [
                 'choices' => [
-                    'EDAHABIA' => 'EDAHABIA',
-                    'CIB' => 'CIB',
+                    'Arabic' => 'ar',
+                    'English' => 'en',
+                    'French' => 'fr',
                 ],
-                'label' => 'Mode',
+                'label' => 'Checkout locale',
             ])
-        ;
+            ->add('payment_method', ChoiceType::class, [
+                'choices' => [
+                    'EDAHABIA' => 'edahabia',
+                    'CIB' => 'cib',
+                    'Chargily App' => 'chargily_app',
+                ],
+                'label' => 'Default payment method',
+            ]);
     }
 }

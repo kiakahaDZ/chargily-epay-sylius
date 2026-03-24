@@ -1,8 +1,13 @@
 services:
+    _defaults:
+        autowire: true
+        autoconfigure: true
+        public: false
+
     kiakaha.chargily_plugin.form.type.gateway_configuration:
         class: Chargily\EpayPlugin\Form\Type\ChargilyGatewayConfigurationType
         tags:
-            - { name: sylius.gateway_configuration_type, type: chargily, label: Chargily }
+            - { name: sylius.gateway_configuration_type, type: chargily, label: Chargily Pay V2 }
             - { name: form.type }
 
     kiakaha.chargily_plugin.gateway_factory:
@@ -10,17 +15,16 @@ services:
         arguments: [Chargily\EpayPlugin\ChargilyGatewayFactory]
         tags:
             - { name: payum.gateway_factory_builder, factory: chargily }
-    
-    kiakaha.chargily_plugin.payfort_action:
+
+    kiakaha.chargily_plugin.chargily_action:
         class: Chargily\EpayPlugin\Action\ChargilyAction
-        arguments: ['@sylius.repository.order']
+        arguments:
+            - '@sylius.repository.order'
+            - '@http_client'
         tags:
-            - { name: payum.action, factory: chargily, alias: payum.action.set_payfort }
-        public: true
-    
+            - { name: payum.action, factory: chargily, alias: payum.action.capture }
+
     app.hello_controller:
         class: Chargily\EpayPlugin\Controller\InvoiceController
         public: true
         tags: [ controller.service_arguments ]
-        calls:
-            - [ 'setContainer', [ '@service_container' ] ]

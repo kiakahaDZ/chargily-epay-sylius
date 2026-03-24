@@ -1,37 +1,31 @@
 <?php
-/**
- * Created by PhpStorm.
- * User: mohamed
- * Date: 12/4/18
- * Time: 12:32 PM
- */
+
+declare(strict_types=1);
 
 namespace Chargily\EpayPlugin\Action;
 
 use App\Entity\Order\Order;
-
 use Payum\Core\Action\ActionInterface;
 use Payum\Core\ApiAwareInterface;
 use Payum\Core\Bridge\Spl\ArrayObject;
 use Payum\Core\Exception\RequestNotSupportedException;
 use Payum\Core\Exception\UnsupportedApiException;
 use Payum\Core\Reply\HttpRedirect;
-use Sylius\Component\Core\Model\AdjustmentInterface;
+use Payum\Core\Request\Capture;
 use Sylius\Component\Core\Repository\OrderRepositoryInterface;
-use Chargily\ePay\Chargily;
+use Symfony\Contracts\HttpClient\HttpClientInterface;
 
 final class ChargilyAction implements ApiAwareInterface, ActionInterface
 {
-    private $api = [];
-    /**
-     * @var OrderRepositoryInterface|null
-     */
-    private $orderRepository;
+    private array $api = [];
 
-    /**
-     * {@inheritDoc}
-     */
-    public function setApi($api)
+    public function __construct(
+        private readonly ?OrderRepositoryInterface $orderRepository,
+        private readonly ?HttpClientInterface $httpClient,
+    ) {
+    }
+
+    public function setApi($api): void
     {
         if (!is_array($api)) {
             throw new UnsupportedApiException('Not supported.');
@@ -40,99 +34,69 @@ final class ChargilyAction implements ApiAwareInterface, ActionInterface
         $this->api = $api;
     }
 
-    public function __construct(?OrderRepositoryInterface $orderRepository)
+    public function execute($request): void
     {
-        $this->orderRepository = $orderRepository;
-    }
+        RequestNotSupportedException::assertSupports($this, $request);
 
-    /**
-     * {@inheritDoc}
-     * @throws \Twig\Error\Error
-     * @throws \Exception
-     */
-    public function execute($request)
-    {
-        $api_key = $this->api['api_key'];
-        $api_secret = $this->api['api_secret'];
-        $invoice_details = $this->api['invoice_details'];
-        $base_url = $this->api['base_url'];
-        $mode = $this->api['mode'];
+        if (null === $this->orderRepository || null === $this->httpClient) {
+            throw new \LogicException('ChargilyAction dependencies are not configured.');
+        }
 
         $model = ArrayObject::ensureArrayObject($request->getModel());
+        $orderId = $request->getFirstModel()->getId();
 
-        $number = $request->getFirstModel()->getId();
-        //$number = $request->getFirstModel()['orderReference'];
-        /** @var Order $order_origin */
-        $order_origin = $this->orderRepository->findOneBy(['id' => $number]);
-        //$order_origin = $this->orderRepository->findOneBy(['number' => $number]);
-
-        $model['customer'] = $order_origin->getCustomer();
-        $model['baseOrder'] = $order_origin;
-        $model['locale'] = $this->getFallbackLocaleCode($order_origin->getLocaleCode());
-        $model['phoneNumber'] = $order_origin->getShippingAddress()->getPhoneNumber();
-        $model['orderReference'] = $order_origin->getNumber();
-
-        $client_name = $order_origin->getBillingAddress()->getFirstName() . ' ' . $order_origin->getBillingAddress()->getLastName();
-
-        $customer = $order_origin->getCustomer();
-
-        if (($order_origin->getTotal() / 100) < 75) {
-            //Redirect sylius_shop_homepage
-            throw new HttpRedirect("{$base_url}");
-            //throw new HttpRedirect("https://{$base_url}");
+        /** @var Order|null $order */
+        $order = $this->orderRepository->find($orderId);
+        if (null === $order) {
+            throw new \RuntimeException(sprintf('Order with id "%s" was not found.', (string) $orderId));
         }
 
-        $totalCouponDiscount = 0;
-        $dis = $order_origin->getAdjustmentsRecursively(AdjustmentInterface::ORDER_PROMOTION_ADJUSTMENT);
-        foreach ($dis as $d) {
-            $totalCouponDiscount = $totalCouponDiscount + $d->getAmount();
-        }
-
-        $chargily = new Chargily([
-            //credentials
-            'api_key' => $api_key,
-            'api_secret' => $api_secret,
-            //urls
-            'urls' => [
-                'back_url' => "{$base_url}", // this is where client redirected after payment processing
-                'webhook_url' => "{$base_url}chargily/response/{$order_origin->getNumber()}", // this is where you receive payment informations
+        $payload = [
+            'amount' => $order->getTotal(),
+            'currency' => strtolower($order->getCurrencyCode()),
+            'payment_method' => $this->api['payment_method'],
+            'success_url' => $this->api['success_url'],
+            'failure_url' => $this->api['failure_url'],
+            'webhook_endpoint' => rtrim($this->api['failure_url'], '/') . '/chargily/response/' . $order->getNumber(),
+            'description' => sprintf('%s (%s)', (string) $this->api['description'], $order->getNumber()),
+            'locale' => $this->normalizeLocale((string) $order->getLocaleCode(), (string) $this->api['locale']),
+            'metadata' => [
+                'order_number' => $order->getNumber(),
             ],
-            //mode
-            'mode' => $mode, //OR CIB
-            //payment details
-            'payment' => [
-                'number' => $order_origin->getNumber(), // Payment or order number
-                'client_name' => $client_name, // Client name
-                'client_email' => $customer->getEmail(), // This is where client receive payment receipt after confirmation
-                'amount' => $order_origin->getTotal() / 100, //this the amount must be greater than or equal 75
-                'discount' => $totalCouponDiscount / 100, //this is discount percentage between 0 and 99
-                'description' => $invoice_details, // this is the payment description
+        ];
 
-            ]
-        ]);
-// get redirect url
+        $response = $this->httpClient->request('POST', $this->api['api_base_url'] . '/checkouts', [
+            'headers' => [
+                'Authorization' => 'Bearer ' . $this->api['secret_key'],
+                'Accept' => 'application/json',
+                'Content-Type' => 'application/json',
+            ],
+            'json' => $payload,
+        ])->toArray(false);
 
-        $redirectUrl = $chargily->getRedirectUrl();
+        $redirectUrl = $response['checkout_url'] ?? $this->api['failure_url'];
+        $model['chargily_checkout_id'] = $response['id'] ?? null;
 
-        if ($redirectUrl) {
-            //redirect
-            throw new HttpRedirect($redirectUrl);
-        } else {
-            throw new HttpRedirect($base_url);
+        throw new HttpRedirect($redirectUrl);
+    }
+
+    public function supports($request): bool
+    {
+        return $request instanceof Capture && $request->getModel() instanceof \ArrayObject;
+    }
+
+    private function normalizeLocale(?string $orderLocale, string $fallback): string
+    {
+        if (null === $orderLocale || '' === $orderLocale) {
+            return $fallback;
         }
-    }
 
-    /**
-     * {@inheritDoc}
-     */
-    public function supports($request)
-    {
-        return
-            $request->getModel() instanceof \ArrayObject;
-    }
+        $locale = strtolower(explode('_', $orderLocale)[0]);
 
-    private function getFallbackLocaleCode($localeCode)
-    {
-        return explode('_', $localeCode)[0];
+        if (in_array($locale, ['ar', 'en', 'fr'], true)) {
+            return $locale;
+        }
+
+        return $fallback;
     }
 }
